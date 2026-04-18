@@ -1,0 +1,154 @@
+
+-- [[ TSB ULTIMATE DASH SYSTEM - MASTER VERSION ]] --
+local UIS = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local Debris = game:GetService("Debris")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local char = player.Character or player.CharacterAdded:Wait()
+local hum = char:WaitForChild("Humanoid")
+local hrp = char:WaitForChild("HumanoidRootPart")
+local animator = hum:WaitForChild("Animator")
+
+-- Foldery
+local animFolder = script:WaitForChild("Animations")
+local vfxFolder = script:WaitForChild("VFX")
+
+-- === KONFIGURACJA ===
+local SPEED_FRONT = 60          
+local SPEED_SIDE = 40           
+local DASH_DURATION = 0.35      
+local COOLDOWN = 0.6            
+local DAMAGE = 5               
+local KNOCKBACK_POWER = 20     
+local lastDash = 0
+
+-- 1. FUNKCJA: SCREEN SHAKE
+local function applyScreenShake(intensity, duration)
+	local startTime = tick()
+	local connection
+	connection = RunService.RenderStepped:Connect(function()
+		local elapsed = tick() - startTime
+		if elapsed < duration then
+			local offset = Vector3.new(math.random(-intensity, intensity)/10, math.random(-intensity, intensity)/10, math.random(-intensity, intensity)/10)
+			hum.CameraOffset = offset
+		else
+			hum.CameraOffset = Vector3.new(0,0,0)
+			connection:Disconnect()
+		end
+	end)
+end
+
+-- 2. FUNKCJA: TRAIL (SMUGA)
+local function emitTrailVFX()
+	local trailTemplate = vfxFolder:FindFirstChild("DashTrail")
+	if not trailTemplate then return end
+	local att0 = Instance.new("Attachment", hrp)
+	local att1 = Instance.new("Attachment", hrp)
+	att0.Position = Vector3.new(0, 1, 0.5); att1.Position = Vector3.new(0, -1, 0.5)
+	local trail = trailTemplate:Clone()
+	trail.Attachment0 = att0; trail.Attachment1 = att1
+	trail.Parent = hrp; trail.Enabled = true
+	Debris:AddItem(trail, DASH_DURATION + 0.2)
+	Debris:AddItem(att0, DASH_DURATION + 0.2); Debris:AddItem(att1, DASH_DURATION + 0.2)
+end
+
+-- 3. FUNKCJA: SMOKE (DYM POD NOGAMI)
+local function emitSmokeVFX()
+	local lFoot = char:FindFirstChild("Left Leg") or char:FindFirstChild("LeftFoot")
+	local rFoot = char:FindFirstChild("Right Leg") or char:FindFirstChild("RightFoot")
+	local smoke = vfxFolder:FindFirstChild("DashSmoke")
+	if lFoot and rFoot and smoke then
+		local s1 = smoke:Clone(); s1.Parent = lFoot; s1.Enabled = true
+		local s2 = smoke:Clone(); s2.Parent = rFoot; s2.Enabled = true
+		s1:Emit(5); s2:Emit(5)
+		Debris:AddItem(s1, 1); Debris:AddItem(s2, 1)
+		task.delay(DASH_DURATION, function() s1.Enabled = false; s2.Enabled = false end)
+	end
+end
+
+-- 4. FUNKCJA: IMPACT VFX (POTĘŻNE UDERZENIE)
+local function playImpactVFX(pos)
+	local att = Instance.new("Attachment", workspace.Terrain)
+	att.WorldPosition = pos
+	local flash = vfxFolder:FindFirstChild("ImpactFlash")
+	local sparks = vfxFolder:FindFirstChild("ImpactSparks")
+	local debris = vfxFolder:FindFirstChild("ImpactDebris")
+	if flash and sparks and debris then
+		local f = flash:Clone(); f.Parent = att; f:Emit(1)
+		local s = sparks:Clone(); s.Parent = att; s:Emit(30)
+		local d = debris:Clone(); d.Parent = att; d:Emit(15)
+	end
+	Debris:AddItem(att, 2)
+end
+
+-- GŁÓWNA FUNKCJA DASHA
+local function performDash()
+	if tick() - lastDash < COOLDOWN then return end
+
+	local direction = "Front"
+	local dashVel = hrp.CFrame.LookVector
+	local currentSpeed = SPEED_FRONT
+
+	if UIS:IsKeyDown(Enum.KeyCode.S) then 
+		direction = "Back"; dashVel = -hrp.CFrame.LookVector; currentSpeed = SPEED_SIDE
+	elseif UIS:IsKeyDown(Enum.KeyCode.A) then 
+		direction = "Left"; dashVel = -hrp.CFrame.RightVector; currentSpeed = SPEED_SIDE
+	elseif UIS:IsKeyDown(Enum.KeyCode.D) then 
+		direction = "Right"; dashVel = hrp.CFrame.RightVector; currentSpeed = SPEED_SIDE
+	end
+
+	lastDash = tick()
+	emitTrailVFX()
+	emitSmokeVFX()
+
+	-- A. ANIMACJA
+	local animObj = animFolder:FindFirstChild(direction)
+	if animObj then
+		for _, t in pairs(animator:GetPlayingAnimationTracks()) do t:Stop(0) end
+		local track = animator:LoadAnimation(animObj)
+		track.Priority = Enum.AnimationPriority.Action4
+		track:Play(0)
+		task.delay(DASH_DURATION, function() track:Stop(0.1) end)
+	end
+
+	-- B. RUCH
+	hum:ChangeState(Enum.HumanoidStateType.Physics)
+	local bv = Instance.new("BodyVelocity", hrp)
+	bv.MaxForce = Vector3.new(1e6, 0, 1e6); bv.Velocity = dashVel * currentSpeed
+	local bg = Instance.new("BodyGyro", hrp)
+	bg.MaxTorque = Vector3.new(1e6, 1e6, 1e6); bg.CFrame = hrp.CFrame
+
+	-- C. HITBOX (TYLKO FRONT)
+	if direction == "Front" then
+		task.delay(DASH_DURATION * 0.7, function()
+			local hitbox = Instance.new("Part")
+			hitbox.Size = Vector3.new(6, 6, 6); hitbox.Transparency = 1; hitbox.CanCollide = false
+			hitbox.CFrame = hrp.CFrame * CFrame.new(0, 0, -2); hitbox.Parent = char
+			local weld = Instance.new("WeldConstraint", hitbox); weld.Part0 = hrp; weld.Part1 = hitbox
+			hitbox.Touched:Connect(function(hit)
+				local eChar = hit.Parent
+				local eHum = eChar:FindFirstChild("Humanoid")
+				if eHum and eChar ~= char then
+					eHum:TakeDamage(DAMAGE)
+					applyScreenShake(4, 0.2)
+					playImpactVFX(hitbox.Position)
+					local kb = Instance.new("BodyVelocity", eChar:FindFirstChild("HumanoidRootPart"))
+					kb.Velocity = (dashVel * KNOCKBACK_POWER) + Vector3.new(0, 25, 0)
+					kb.MaxForce = Vector3.new(1e6, 1e6, 1e6); Debris:AddItem(kb, 0.2)
+				end
+			end)
+			Debris:AddItem(hitbox, 0.15)
+		end)
+	end
+
+	task.delay(DASH_DURATION, function()
+		bv:Destroy(); bg:Destroy()
+		hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+	end)
+end
+
+UIS.InputBegan:Connect(function(input, gpe)
+	if not gpe and input.KeyCode == Enum.KeyCode.Q then performDash() end
+end)
